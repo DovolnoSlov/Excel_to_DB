@@ -1,0 +1,7 @@
+data:
+  path: ['data']
+
+database:
+  name: 'Excel_to_DB.db'
+  type: 'sqlite'
+  path: '.'
