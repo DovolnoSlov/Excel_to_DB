@@ -4,14 +4,18 @@ import shutil
 import time
 import pandas as pd
 import yaml
+import logging
+
+logging.basicConfig(level=logging.INFO, filename="py_log.log", filemode="w",
+                    format="%(asctime)s %(levelname)s %(message)s")
 
 __config_path = os.path.abspath(os.path.join('.', 'config.yaml'))
 with open(os.path.join(__config_path)) as f_config:
-    config = yaml.safe_load(f_config)
+    __config = yaml.safe_load(f_config)
 
-PATH_TO_DATA = os.path.abspath(os.path.join('.', *config['data']['path']))
-TYPE_OF_DATABASE = config['database']['type']
-PATH_TO_DATABASE = os.path.abspath(os.path.join(config['database']['path'], config['database']['name']))
+PATH_TO_DATA = os.path.abspath(os.path.join('.', *__config['data']['path']))
+TYPE_OF_DATABASE = __config['database']['type']
+PATH_TO_DATABASE = os.path.abspath(os.path.join(__config['database']['path'], __config['database']['name']))
 
 
 class AppNoFlask:
@@ -49,24 +53,18 @@ class AppNoFlask:
         """ Добавление данных из файла в БД, с последующим удалением файла """
 
         path_to_file = os.path.join(self.path_data, file_name)
-        engine = create_engine(f"{self.type_database}:///{self.path_database}")
-        with engine.connect() as connect:
-            transaction = connect.begin()
-            try:
-                try:
-                    df_data = self.__get_df(path_to_file)
-                except:
-                    file_move_path = os.path.join(self.path_data, 'problem_files', file_name)
-                    shutil.move(path_to_file, file_move_path)
-                    raise ValueError(" Ошибка загрузки данных ")
 
-                df_data.to_sql(name='deltatable', con=connect, if_exists='append',
-                               index=False, dtype={"Rep_dt": Date, "Delta": Float})
-                transaction.commit()
-                os.remove(path_to_file)
-            except Exception as E:
-                #print(f'{E}: {file_name}')
-                transaction.rollback()
+        try:
+            df_data = self.__get_df(path_to_file)
+            logging.info(f"Successful download from file: {file_name}")
+
+        except Exception as E:
+            file_move_path = os.path.join(self.path_data, 'problem_files', file_name)
+            shutil.move(path_to_file, file_move_path)
+            logging.error(f"Wrong file: {file_name}\n{E}", exc_info=True)
+
+        else:
+            self.__uploading_to_db(path_to_file, df_data)
 
     def __get_df(self, path_to_file: str) -> pd.DataFrame:
         """
@@ -77,6 +75,22 @@ class AppNoFlask:
         df['Rep_dt'] = pd.to_datetime(df['Rep_dt'], format='mixed', dayfirst=False)
         df['Delta'] = df['Delta'].astype(float)
         return df
+
+    def __uploading_to_db(self, path_to_file: str, data: pd.DataFrame) -> None:
+        """ Выгрузка данных из датафрейма в базу данных через транзакцию. """
+
+        engine = create_engine(f"{self.type_database}:///{self.path_database}")
+        with engine.connect() as connect:
+            transaction = connect.begin()
+            try:
+                data.to_sql(name='deltatable', con=connect, if_exists='append',
+                            index=False, dtype={"Rep_dt": Date, "Delta": Float})
+                transaction.commit()
+                os.remove(path_to_file)
+                logging.info(f"Successful transaction to DB. Original file deleted")
+            except Exception as E:
+                logging.error(f"Failed transaction!\n{E}", exc_info=True)
+                transaction.rollback()
 
 
 def __create_db(path_database: str = PATH_TO_DATABASE) -> None:
@@ -90,6 +104,7 @@ def __create_db(path_database: str = PATH_TO_DATABASE) -> None:
         Column('Delta', Float),
     )
     metadata.create_all(engine)
+    logging.info(f"Create DB")
 
 
 def main() -> None:
